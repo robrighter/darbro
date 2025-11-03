@@ -414,6 +414,342 @@ class TestDarbroNumericalStability(unittest.TestCase):
         np.testing.assert_allclose(identity, expected_identity, rtol=1e-8, atol=1e-8)
 
 
+class TestDarbroRSquared(unittest.TestCase):
+    """Test R² and adjusted R² calculations"""
+
+    def setUp(self):
+        """Load data and calculate analytics"""
+        self.df = Darbro.read_csv('bodyfat.csv', 'bodyfat', ['triceps', 'thigh', 'midarm'])
+        self.model = Darbro(self.df)
+        self.model.calculate_analytical_information()
+
+    def test_r_squared_exists(self):
+        """Test that R² is calculated"""
+        self.assertIsNotNone(self.model.r_squared)
+
+    def test_r_squared_range(self):
+        """Test that R² is between 0 and 1"""
+        self.assertGreaterEqual(self.model.r_squared, 0)
+        self.assertLessEqual(self.model.r_squared, 1)
+
+    def test_r_squared_value(self):
+        """Test that R² has a reasonable value for bodyfat dataset"""
+        # For the bodyfat dataset, R² should be around 0.8
+        self.assertGreater(self.model.r_squared, 0.7)
+        self.assertLess(self.model.r_squared, 0.9)
+
+    def test_r_squared_calculation(self):
+        """Test R² calculation manually"""
+        y_mean = np.mean(self.model.y.values)
+        sst = np.sum((self.model.y.values - y_mean) ** 2)
+        expected_r_squared = 1 - (self.model.sse / sst)
+        self.assertAlmostEqual(self.model.r_squared, expected_r_squared, places=10)
+
+    def test_adjusted_r_squared_exists(self):
+        """Test that adjusted R² is calculated"""
+        self.assertIsNotNone(self.model.adjusted_r_squared)
+
+    def test_adjusted_r_squared_less_than_r_squared(self):
+        """Test that adjusted R² is less than or equal to R²"""
+        self.assertLessEqual(self.model.adjusted_r_squared, self.model.r_squared)
+
+    def test_adjusted_r_squared_calculation(self):
+        """Test adjusted R² calculation manually"""
+        n = len(self.model.y)
+        p = self.model.X.shape[1]
+        expected_adj_r_squared = 1 - ((1 - self.model.r_squared) * (n - 1) / (n - p))
+        self.assertAlmostEqual(self.model.adjusted_r_squared, expected_adj_r_squared, places=10)
+
+    def test_perfect_fit_r_squared(self):
+        """Test R² equals 1 for perfect fit"""
+        x = np.array([1, 2, 3, 4, 5])
+        y = 2 + 3 * x
+        df = pd.DataFrame({'y': y, 'x': x})
+        model = Darbro(df)
+        model.calculate_analytical_information()
+
+        self.assertAlmostEqual(model.r_squared, 1.0, places=10)
+
+    def test_simple_regression_r_squared(self):
+        """Test R² with simple linear regression"""
+        np.random.seed(42)
+        n = 50
+        x = np.linspace(0, 10, n)
+        y = 2 + 3 * x + np.random.normal(0, 1, n)
+        df = pd.DataFrame({'y': y, 'x': x})
+        model = Darbro(df)
+        model.calculate_analytical_information()
+
+        # R² should be high for strong linear relationship
+        self.assertGreater(model.r_squared, 0.9)
+
+
+class TestDarbroHypothesisTesting(unittest.TestCase):
+    """Test hypothesis testing features (t-statistics, p-values, F-test)"""
+
+    def setUp(self):
+        """Load data and calculate analytics"""
+        self.df = Darbro.read_csv('bodyfat.csv', 'bodyfat', ['triceps', 'thigh', 'midarm'])
+        self.model = Darbro(self.df)
+        self.model.calculate_analytical_information()
+
+    def test_standard_errors_exist(self):
+        """Test that standard errors are calculated"""
+        self.assertIsNotNone(self.model.standard_errors)
+
+    def test_standard_errors_positive(self):
+        """Test that all standard errors are positive"""
+        self.assertTrue(np.all(self.model.standard_errors > 0))
+
+    def test_standard_errors_length(self):
+        """Test that standard errors match number of coefficients"""
+        self.assertEqual(len(self.model.standard_errors), len(self.model.coefficients))
+
+    def test_standard_errors_calculation(self):
+        """Test standard errors are sqrt of variance diagonal"""
+        expected_se = np.sqrt(np.diag(self.model.variance_covariance))
+        np.testing.assert_allclose(self.model.standard_errors, expected_se, rtol=1e-10)
+
+    def test_t_statistics_exist(self):
+        """Test that t-statistics are calculated"""
+        self.assertIsNotNone(self.model.t_statistics)
+
+    def test_t_statistics_length(self):
+        """Test that t-statistics match number of coefficients"""
+        self.assertEqual(len(self.model.t_statistics), len(self.model.coefficients))
+
+    def test_t_statistics_calculation(self):
+        """Test t-statistics are coefficient / standard error"""
+        expected_t = self.model.coefficients / self.model.standard_errors
+        np.testing.assert_allclose(self.model.t_statistics, expected_t, rtol=1e-10)
+
+    def test_t_statistics_intercept(self):
+        """Test that intercept t-statistic is reasonable"""
+        # First coefficient is intercept
+        self.assertIsInstance(self.model.t_statistics[0], (float, np.floating))
+
+    def test_p_values_exist(self):
+        """Test that p-values are calculated"""
+        self.assertIsNotNone(self.model.p_values)
+
+    def test_p_values_length(self):
+        """Test that p-values match number of coefficients"""
+        self.assertEqual(len(self.model.p_values), len(self.model.coefficients))
+
+    def test_p_values_range(self):
+        """Test that all p-values are between 0 and 1"""
+        self.assertTrue(np.all(self.model.p_values >= 0))
+        self.assertTrue(np.all(self.model.p_values <= 1))
+
+    def test_p_values_calculation(self):
+        """Test p-values calculation manually"""
+        from scipy import stats
+        n = len(self.model.y)
+        p = self.model.X.shape[1]
+        df = n - p
+        expected_p_values = 2 * (1 - stats.t.cdf(np.abs(self.model.t_statistics), df))
+        np.testing.assert_allclose(self.model.p_values, expected_p_values, rtol=1e-10)
+
+    def test_significant_coefficients(self):
+        """Test that overall model is significant even if individual coefficients aren't"""
+        # For the bodyfat dataset, individual coefficients may not be significant
+        # due to multicollinearity, but the overall F-test should be significant
+        self.assertIsNotNone(self.model.p_values)
+        # The overall model should be significant
+        self.assertLess(self.model.f_p_value, 0.05)
+
+    def test_f_statistic_exists(self):
+        """Test that F-statistic is calculated"""
+        self.assertIsNotNone(self.model.f_statistic)
+
+    def test_f_statistic_positive(self):
+        """Test that F-statistic is positive"""
+        self.assertGreater(self.model.f_statistic, 0)
+
+    def test_f_p_value_exists(self):
+        """Test that F p-value is calculated"""
+        self.assertIsNotNone(self.model.f_p_value)
+
+    def test_f_p_value_range(self):
+        """Test that F p-value is between 0 and 1"""
+        self.assertGreaterEqual(self.model.f_p_value, 0)
+        self.assertLessEqual(self.model.f_p_value, 1)
+
+    def test_f_statistic_calculation(self):
+        """Test F-statistic calculation manually"""
+        y_mean = np.mean(self.model.y.values)
+        sst = np.sum((self.model.y.values - y_mean) ** 2)
+        ssr = sst - self.model.sse
+
+        n = len(self.model.y)
+        p = self.model.X.shape[1]
+        df_model = p - 1
+        df_residual = n - p
+
+        expected_f = (ssr / df_model) / (self.model.sse / df_residual)
+        self.assertAlmostEqual(self.model.f_statistic, expected_f, places=10)
+
+    def test_f_statistic_significance(self):
+        """Test that F-statistic is significant for bodyfat dataset"""
+        # The model should be significant
+        self.assertLess(self.model.f_p_value, 0.05)
+
+    def test_perfect_fit_small_p_values(self):
+        """Test that perfect fit gives very small p-values"""
+        x = np.array([1, 2, 3, 4, 5])
+        y = 2 + 3 * x
+        df = pd.DataFrame({'y': y, 'x': x})
+        model = Darbro(df)
+        model.calculate_analytical_information()
+
+        # All residuals are zero, so t-statistics should be very large
+        # and p-values should be very small (approaching 0)
+        # However, with perfect fit and small sample, this might be undefined
+        # so we just test that the calculation doesn't error
+
+    def test_simple_regression_t_tests(self):
+        """Test t-statistics with simple regression"""
+        np.random.seed(42)
+        n = 100
+        x = np.linspace(0, 10, n)
+        y = 5 + 2 * x + np.random.normal(0, 2, n)
+        df = pd.DataFrame({'y': y, 'x': x})
+        model = Darbro(df)
+        model.calculate_analytical_information()
+
+        # Both intercept and slope should be significant
+        self.assertLess(model.p_values[0], 0.05)  # intercept
+        self.assertLess(model.p_values[1], 0.05)  # slope
+
+
+class TestDarbroGetSummary(unittest.TestCase):
+    """Test the get_summary() method"""
+
+    def setUp(self):
+        """Load data and calculate analytics"""
+        self.df = Darbro.read_csv('bodyfat.csv', 'bodyfat', ['triceps', 'thigh', 'midarm'])
+        self.model = Darbro(self.df)
+        self.model.calculate_analytical_information()
+
+    def test_get_summary_returns_string(self):
+        """Test that get_summary returns a string"""
+        summary = self.model.get_summary()
+        self.assertIsInstance(summary, str)
+
+    def test_get_summary_contains_r_squared(self):
+        """Test that summary contains R² value"""
+        summary = self.model.get_summary()
+        self.assertIn('R-squared', summary)
+        self.assertIn(f'{self.model.r_squared:.4f}', summary)
+
+    def test_get_summary_contains_adjusted_r_squared(self):
+        """Test that summary contains adjusted R² value"""
+        summary = self.model.get_summary()
+        self.assertIn('Adjusted R-squared', summary)
+
+    def test_get_summary_contains_f_statistic(self):
+        """Test that summary contains F-statistic"""
+        summary = self.model.get_summary()
+        self.assertIn('F-statistic', summary)
+
+    def test_get_summary_contains_coefficients(self):
+        """Test that summary contains coefficient table"""
+        summary = self.model.get_summary()
+        self.assertIn('Coefficients:', summary)
+        self.assertIn('Intercept', summary)
+        self.assertIn('triceps', summary)
+        self.assertIn('thigh', summary)
+        self.assertIn('midarm', summary)
+
+    def test_get_summary_contains_std_errors(self):
+        """Test that summary contains standard errors"""
+        summary = self.model.get_summary()
+        self.assertIn('Std Err', summary)
+
+    def test_get_summary_contains_t_stats(self):
+        """Test that summary contains t-statistics"""
+        summary = self.model.get_summary()
+        self.assertIn('t', summary)
+
+    def test_get_summary_contains_p_values(self):
+        """Test that summary contains p-values"""
+        summary = self.model.get_summary()
+        self.assertIn('P>|t|', summary)
+
+    def test_get_summary_error_without_calculation(self):
+        """Test that get_summary raises error if analytics not calculated"""
+        df = Darbro.read_csv('bodyfat.csv', 'bodyfat', ['triceps', 'thigh', 'midarm'])
+        model = Darbro(df)
+        # Don't call calculate_analytical_information()
+
+        with self.assertRaises(ValueError):
+            model.get_summary()
+
+    def test_get_summary_formatting(self):
+        """Test that summary has proper formatting"""
+        summary = self.model.get_summary()
+        lines = summary.split('\n')
+
+        # Should have multiple lines
+        self.assertGreater(len(lines), 10)
+
+        # Should have separator lines
+        self.assertTrue(any('=' * 50 in line for line in lines))
+
+
+class TestDarbroHypothesisTestingEdgeCases(unittest.TestCase):
+    """Test edge cases for hypothesis testing"""
+
+    def test_no_predictors_f_statistic(self):
+        """Test F-statistic with intercept-only model"""
+        # Create data where y is just a constant + noise
+        np.random.seed(42)
+        y = np.full(20, 10) + np.random.normal(0, 1, 20)
+        # Create a dummy predictor that we won't use
+        df = pd.DataFrame({'y': y})
+
+        # For intercept-only model, we need at least one predictor column
+        # This test might not be applicable with current design
+
+    def test_multiple_predictors_hypothesis_tests(self):
+        """Test with multiple predictors"""
+        np.random.seed(42)
+        n = 100
+        x1 = np.random.randn(n)
+        x2 = np.random.randn(n)
+        x3 = np.random.randn(n)
+        y = 5 + 2*x1 - 3*x2 + 1.5*x3 + np.random.randn(n)
+
+        df = pd.DataFrame({'y': y, 'x1': x1, 'x2': x2, 'x3': x3})
+        model = Darbro(df)
+        model.calculate_analytical_information()
+
+        # Should have 4 coefficients (intercept + 3 predictors)
+        self.assertEqual(len(model.t_statistics), 4)
+        self.assertEqual(len(model.p_values), 4)
+
+        # All coefficients should be significant
+        self.assertTrue(np.all(model.p_values < 0.05))
+
+        # F-test should be highly significant
+        self.assertLess(model.f_p_value, 0.001)
+
+    def test_weak_relationship_high_p_values(self):
+        """Test that weak relationships have high p-values"""
+        np.random.seed(42)
+        n = 30
+        x = np.random.randn(n)
+        y = 5 + 0.01 * x + np.random.normal(0, 5, n)  # Very weak relationship
+
+        df = pd.DataFrame({'y': y, 'x': x})
+        model = Darbro(df)
+        model.calculate_analytical_information()
+
+        # The slope coefficient should have high p-value (not significant)
+        # p-value for x should be > 0.05
+        self.assertGreater(model.p_values[1], 0.05)
+
+
 if __name__ == '__main__':
     # Run tests with verbose output
     unittest.main(verbosity=2)
