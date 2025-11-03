@@ -15,6 +15,7 @@ Darbro is a lightweight educational library designed to help understand the math
 - **Model Fit Metrics**: R² and adjusted R² for evaluating model performance
 - **Statistical Summary**: Formatted regression results table similar to R or statsmodels
 - **Prediction**: Make predictions on new data points
+- **Confidence Intervals**: Confidence intervals for mean response and prediction intervals for individual observations
 - **CSV Integration**: Easy data loading from CSV files
 - **Educational Focus**: Clear implementation showing the mathematical operations
 
@@ -210,6 +211,81 @@ Makes a prediction for new data.
 prediction = model.predict(np.array([25.0, 50.0, 28.0]))
 ```
 
+##### `confidence_interval_mean(X_new, alpha=0.05)`
+
+Calculates a confidence interval for the mean response E[Y|X].
+
+This interval estimates where the average value of Y is likely to fall for a given X, with a specified confidence level.
+
+**Parameters:**
+- `X_new` (numpy.ndarray): New predictor values (without intercept)
+- `alpha` (float): Significance level (default=0.05 for 95% confidence)
+
+**Returns:** tuple (lower_bound, point_estimate, upper_bound)
+
+**Must be called after `calculate_analytical_information()`.**
+
+**Example:**
+```python
+model = Darbro(df)
+model.calculate_analytical_information()
+
+# Get 95% confidence interval for mean response
+lower, prediction, upper = model.confidence_interval_mean(np.array([25.0, 50.0, 28.0]))
+print(f"95% CI for mean: [{lower:.2f}, {upper:.2f}]")
+```
+
+##### `prediction_interval(X_new, alpha=0.05)`
+
+Calculates a prediction interval for a new individual observation Y|X.
+
+This interval estimates where a single new observation of Y is likely to fall for a given X. It is wider than the confidence interval for the mean because it accounts for both the uncertainty in estimating the mean and the random variation of individual observations.
+
+**Parameters:**
+- `X_new` (numpy.ndarray): New predictor values (without intercept)
+- `alpha` (float): Significance level (default=0.05 for 95% confidence)
+
+**Returns:** tuple (lower_bound, point_estimate, upper_bound)
+
+**Must be called after `calculate_analytical_information()`.**
+
+**Example:**
+```python
+model = Darbro(df)
+model.calculate_analytical_information()
+
+# Get 95% prediction interval for new observation
+lower, prediction, upper = model.prediction_interval(np.array([25.0, 50.0, 28.0]))
+print(f"95% PI for new observation: [{lower:.2f}, {upper:.2f}]")
+```
+
+##### `predict_with_intervals(X_new, alpha=0.05)`
+
+Makes a prediction with both confidence and prediction intervals in one call.
+
+**Parameters:**
+- `X_new` (numpy.ndarray): New predictor values (without intercept)
+- `alpha` (float): Significance level (default=0.05 for 95% confidence)
+
+**Returns:** dict containing:
+- `prediction`: Point estimate
+- `confidence_interval`: Tuple (lower, upper) for mean response
+- `prediction_interval`: Tuple (lower, upper) for new observation
+- `confidence_level`: Confidence level as percentage
+
+**Must be called after `calculate_analytical_information()`.**
+
+**Example:**
+```python
+model = Darbro(df)
+model.calculate_analytical_information()
+
+results = model.predict_with_intervals(np.array([25.0, 50.0, 28.0]))
+print(f"Prediction: {results['prediction']:.2f}")
+print(f"95% CI: {results['confidence_interval']}")
+print(f"95% PI: {results['prediction_interval']}")
+```
+
 ##### `read_csv(csv_path, y_column, predictor_columns)` [Static Method]
 
 Reads a CSV file and extracts specified columns.
@@ -354,6 +430,58 @@ corr_matrix = np.corrcoef(model.variance_covariance)
 print(corr_matrix)
 ```
 
+### Example 5: Confidence and Prediction Intervals
+
+```python
+from darbro import Darbro
+import numpy as np
+
+# Load data and fit model
+df = Darbro.read_csv('bodyfat.csv', 'bodyfat', ['triceps', 'thigh', 'midarm'])
+model = Darbro(df)
+model.calculate_analytical_information()
+
+# New observation to predict
+new_person = np.array([25.0, 50.0, 28.0])  # triceps, thigh, midarm
+
+# Method 1: Get both intervals at once
+results = model.predict_with_intervals(new_person, alpha=0.05)
+print("=== Prediction with Intervals ===")
+print(f"Point Estimate: {results['prediction']:.2f}%")
+print(f"95% Confidence Interval for mean: [{results['confidence_interval'][0]:.2f}, {results['confidence_interval'][1]:.2f}]")
+print(f"95% Prediction Interval for individual: [{results['prediction_interval'][0]:.2f}, {results['prediction_interval'][1]:.2f}]")
+
+# Method 2: Get intervals separately
+print("\n=== Individual Method Calls ===")
+
+# Confidence interval for the mean response
+ci_lower, prediction, ci_upper = model.confidence_interval_mean(new_person)
+print(f"\nConfidence Interval (Mean Response):")
+print(f"  We are 95% confident that the average body fat percentage")
+print(f"  for people with these measurements is between {ci_lower:.2f}% and {ci_upper:.2f}%")
+
+# Prediction interval for a new observation
+pi_lower, prediction, pi_upper = model.prediction_interval(new_person)
+print(f"\nPrediction Interval (New Observation):")
+print(f"  We are 95% confident that a single person with these measurements")
+print(f"  will have a body fat percentage between {pi_lower:.2f}% and {pi_upper:.2f}%")
+
+# Different confidence levels
+print("\n=== Different Confidence Levels ===")
+for conf_level in [0.90, 0.95, 0.99]:
+    alpha = 1 - conf_level
+    ci_lower, pred, ci_upper = model.confidence_interval_mean(new_person, alpha=alpha)
+    pi_lower, pred, pi_upper = model.prediction_interval(new_person, alpha=alpha)
+    print(f"\n{int(conf_level*100)}% Intervals:")
+    print(f"  Confidence Interval: [{ci_lower:.2f}, {ci_upper:.2f}]")
+    print(f"  Prediction Interval: [{pi_lower:.2f}, {pi_upper:.2f}]")
+```
+
+**Key Differences:**
+- **Confidence Interval**: Estimates the average response for a given X (narrower)
+- **Prediction Interval**: Estimates a single new observation for a given X (wider)
+- The prediction interval is always wider because it accounts for individual variation
+
 ## Mathematical Background
 
 ### Ordinary Least Squares (OLS)
@@ -387,7 +515,6 @@ Where:
 ## Limitations
 
 - No regularization (Ridge, Lasso)
-- No confidence intervals for predictions
 - No residual diagnostic plots
 - Assumes no severe multicollinearity issues
 - No automatic handling of categorical variables
@@ -410,7 +537,7 @@ This is an educational library. Suggestions for improvements are welcome!
 Planned features for future versions:
 - ~~Hypothesis testing (t-statistics, p-values, F-test)~~ ✅ Implemented
 - ~~R² and adjusted R²~~ ✅ Implemented
-- Confidence intervals for predictions
+- ~~Confidence intervals for predictions~~ ✅ Implemented
 - Residual diagnostics and plots
 - Support for polynomial regression
 - Cross-validation utilities
