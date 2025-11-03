@@ -14,7 +14,7 @@ Darbro is a lightweight educational library designed to help understand the math
 - **Hypothesis Testing**: t-statistics, p-values for coefficients, and F-test for overall model significance
 - **Model Fit Metrics**: R² and adjusted R² for evaluating model performance
 - **Statistical Summary**: Formatted regression results table similar to R or statsmodels
-- **Prediction**: Make predictions on new data points
+- **Prediction with Intervals**: Make predictions with confidence intervals for mean response and prediction intervals for new observations
 - **CSV Integration**: Easy data loading from CSV files
 - **Educational Focus**: Clear implementation showing the mathematical operations
 
@@ -210,6 +210,89 @@ Makes a prediction for new data.
 prediction = model.predict(np.array([25.0, 50.0, 28.0]))
 ```
 
+##### `confidence_interval_mean(X_new, alpha=0.05)`
+
+Calculates confidence interval for the mean response E[Y|X].
+
+This interval estimates where the average value of Y is likely to fall for a given X with a specified confidence level.
+
+**Parameters:**
+- `X_new` (numpy.ndarray): New predictor values (without intercept)
+- `alpha` (float): Significance level (default 0.05 for 95% confidence)
+
+**Returns:** tuple (lower_bound, point_estimate, upper_bound)
+
+**Must be called after `calculate_analytical_information()`.**
+
+**Formula:** ŷ ± t_{α/2,n-p} × SE(ŷ) where SE(ŷ) = √(MSE × x'(X'X)⁻¹x)
+
+**Example:**
+```python
+model = Darbro(df)
+model.calculate_analytical_information()
+
+new_data = np.array([25.0, 50.0, 28.0])
+lower, point, upper = model.confidence_interval_mean(new_data)
+print(f"95% CI for mean: [{lower:.2f}, {upper:.2f}]")
+print(f"Point estimate: {point:.2f}")
+```
+
+##### `prediction_interval(X_new, alpha=0.05)`
+
+Calculates prediction interval for a new observation Y|X.
+
+This interval estimates where a single new observation of Y is likely to fall for a given X. It is wider than the confidence interval for the mean because it accounts for both the uncertainty in estimating the mean and the random variation of individual observations.
+
+**Parameters:**
+- `X_new` (numpy.ndarray): New predictor values (without intercept)
+- `alpha` (float): Significance level (default 0.05 for 95% confidence)
+
+**Returns:** tuple (lower_bound, point_estimate, upper_bound)
+
+**Must be called after `calculate_analytical_information()`.**
+
+**Formula:** ŷ ± t_{α/2,n-p} × SE(pred) where SE(pred) = √(MSE × (1 + x'(X'X)⁻¹x))
+
+**Example:**
+```python
+model = Darbro(df)
+model.calculate_analytical_information()
+
+new_data = np.array([25.0, 50.0, 28.0])
+lower, point, upper = model.prediction_interval(new_data)
+print(f"95% PI for new observation: [{lower:.2f}, {upper:.2f}]")
+print(f"Point estimate: {point:.2f}")
+```
+
+##### `predict_with_intervals(X_new, alpha=0.05)`
+
+Convenience method that returns prediction with both confidence and prediction intervals.
+
+**Parameters:**
+- `X_new` (numpy.ndarray): New predictor values (without intercept)
+- `alpha` (float): Significance level (default 0.05 for 95% confidence)
+
+**Returns:** dict with keys:
+- `'prediction'`: Point estimate
+- `'confidence_interval'`: (lower, upper) for mean response
+- `'prediction_interval'`: (lower, upper) for new observation
+- `'confidence_level'`: Confidence level as percentage
+
+**Must be called after `calculate_analytical_information()`.**
+
+**Example:**
+```python
+model = Darbro(df)
+model.calculate_analytical_information()
+
+new_data = np.array([25.0, 50.0, 28.0])
+result = model.predict_with_intervals(new_data)
+
+print(f"Prediction: {result['prediction']:.2f}")
+print(f"95% Confidence Interval: {result['confidence_interval']}")
+print(f"95% Prediction Interval: {result['prediction_interval']}")
+```
+
 ##### `read_csv(csv_path, y_column, predictor_columns)` [Static Method]
 
 Reads a CSV file and extracts specified columns.
@@ -330,7 +413,54 @@ print("\nVerification - Fitted values match:")
 print(np.allclose(fitted_via_hat, model.fitted))
 ```
 
-### Example 4: Variance-Covariance Matrix
+### Example 4: Confidence Intervals and Prediction Intervals
+
+```python
+import numpy as np
+from darbro import Darbro
+
+# Load data and fit model
+df = Darbro.read_csv('bodyfat.csv', 'bodyfat', ['triceps', 'thigh', 'midarm'])
+model = Darbro(df)
+model.calculate_analytical_information()
+
+# New observation
+new_person = np.array([25.0, 50.0, 28.0])  # triceps, thigh, midarm
+
+# Method 1: Get confidence interval for mean response
+ci_lower, ci_point, ci_upper = model.confidence_interval_mean(new_person)
+print("=== Confidence Interval for Mean Response ===")
+print(f"Point estimate: {ci_point:.2f}%")
+print(f"95% CI: [{ci_lower:.2f}, {ci_upper:.2f}]")
+print(f"Interpretation: We are 95% confident that the average body fat")
+print(f"for all people with these measurements is between {ci_lower:.2f}% and {ci_upper:.2f}%")
+
+# Method 2: Get prediction interval for new observation
+pi_lower, pi_point, pi_upper = model.prediction_interval(new_person)
+print("\n=== Prediction Interval for New Observation ===")
+print(f"Point estimate: {pi_point:.2f}%")
+print(f"95% PI: [{pi_lower:.2f}, {pi_upper:.2f}]")
+print(f"Interpretation: We are 95% confident that a new individual")
+print(f"with these measurements will have body fat between {pi_lower:.2f}% and {pi_upper:.2f}%")
+
+# Method 3: Get both intervals at once
+print("\n=== Using predict_with_intervals ===")
+result = model.predict_with_intervals(new_person)
+print(f"Prediction: {result['prediction']:.2f}%")
+print(f"Confidence Interval: [{result['confidence_interval'][0]:.2f}, {result['confidence_interval'][1]:.2f}]")
+print(f"Prediction Interval: [{result['prediction_interval'][0]:.2f}, {result['prediction_interval'][1]:.2f}]")
+print(f"Confidence Level: {result['confidence_level']}%")
+
+# Compare intervals at different confidence levels
+print("\n=== Different Confidence Levels ===")
+for alpha in [0.10, 0.05, 0.01]:
+    confidence = (1 - alpha) * 100
+    lower, point, upper = model.confidence_interval_mean(new_person, alpha=alpha)
+    width = upper - lower
+    print(f"{confidence:.0f}% CI: [{lower:.2f}, {upper:.2f}] (width: {width:.2f})")
+```
+
+### Example 5: Variance-Covariance Matrix
 
 ```python
 from darbro import Darbro
@@ -375,6 +505,8 @@ Where:
 5. **Sum of Squared Errors**: SSE = Σ(yᵢ - ŷᵢ)² = e'e
 6. **Mean Squared Error**: MSE = SSE / (n - p)
 7. **Variance-Covariance Matrix**: Var(β) = MSE × (X'X)⁻¹
+8. **Confidence Interval for Mean**: ŷ ± t_{α/2,n-p} × √(MSE × x'(X'X)⁻¹x)
+9. **Prediction Interval**: ŷ ± t_{α/2,n-p} × √(MSE × (1 + x'(X'X)⁻¹x))
 
 ## Use Cases
 
@@ -387,7 +519,6 @@ Where:
 ## Limitations
 
 - No regularization (Ridge, Lasso)
-- No confidence intervals for predictions
 - No residual diagnostic plots
 - Assumes no severe multicollinearity issues
 - No automatic handling of categorical variables
@@ -410,7 +541,7 @@ This is an educational library. Suggestions for improvements are welcome!
 Planned features for future versions:
 - ~~Hypothesis testing (t-statistics, p-values, F-test)~~ ✅ Implemented
 - ~~R² and adjusted R²~~ ✅ Implemented
-- Confidence intervals for predictions
+- ~~Confidence intervals for predictions~~ ✅ Implemented
 - Residual diagnostics and plots
 - Support for polynomial regression
 - Cross-validation utilities
