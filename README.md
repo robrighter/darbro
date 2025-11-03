@@ -11,6 +11,9 @@ Darbro is a lightweight educational library designed to help understand the math
 - **Simple and Multiple Linear Regression**: Supports both single and multiple predictor variables
 - **Matrix-Based Calculations**: Uses numpy for efficient matrix operations
 - **Comprehensive Statistics**: Calculates coefficients, residuals, MSE, SSE, hat matrix, and variance-covariance matrix
+- **Hypothesis Testing**: t-statistics, p-values for coefficients, and F-test for overall model significance
+- **Model Fit Metrics**: R² and adjusted R² for evaluating model performance
+- **Statistical Summary**: Formatted regression results table similar to R or statsmodels
 - **Prediction**: Make predictions on new data points
 - **CSV Integration**: Easy data loading from CSV files
 - **Educational Focus**: Clear implementation showing the mathematical operations
@@ -20,7 +23,7 @@ Darbro is a lightweight educational library designed to help understand the math
 Ensure you have the required dependencies:
 
 ```bash
-pip install numpy pandas
+pip install numpy pandas scipy
 ```
 
 Then clone or download the repository and import the `Darbro` class.
@@ -67,6 +70,9 @@ Darbro(dataframe)
 - `X`: Design matrix with intercept column added
 - `y`: Dependent variable vector
 
+**After calling `calculate_analytical_information()`:**
+All statistical measures and hypothesis tests are computed automatically.
+
 **Example:**
 ```python
 import pandas as pd
@@ -86,6 +92,7 @@ model = Darbro(data)
 
 After calling `calculate_analytical_information()`, the following attributes are available:
 
+**Basic Statistics:**
 - **`coefficients`** (numpy.ndarray): Regression coefficients [β₀, β₁, β₂, ...]
 - **`residuals`** (numpy.ndarray): Residuals (y - ŷ)
 - **`fitted`** (numpy.ndarray): Fitted values (ŷ)
@@ -93,6 +100,17 @@ After calling `calculate_analytical_information()`, the following attributes are
 - **`mse`** (float): Mean Squared Error (SSE / (n - p))
 - **`sse`** (float): Sum of Squared Errors
 - **`variance_covariance`** (numpy.ndarray): Variance-covariance matrix of coefficients
+
+**Hypothesis Testing:**
+- **`t_statistics`** (numpy.ndarray): t-statistics for each coefficient
+- **`p_values`** (numpy.ndarray): Two-tailed p-values for each coefficient
+- **`standard_errors`** (numpy.ndarray): Standard errors of coefficients
+- **`f_statistic`** (float): F-statistic for overall model significance
+- **`f_p_value`** (float): p-value for F-statistic
+
+**Model Fit:**
+- **`r_squared`** (float): R² (coefficient of determination)
+- **`adjusted_r_squared`** (float): Adjusted R² (penalized for number of predictors)
 
 #### Methods
 
@@ -116,22 +134,65 @@ The hat matrix projects y onto the fitted values: ŷ = Hy
 
 Calculates all analytical statistics including:
 - Hat matrix
-- Residuals
-- Fitted values
-- Sum of Squared Errors (SSE)
-- Mean Squared Error (MSE)
+- Residuals and fitted values
+- Sum of Squared Errors (SSE) and Mean Squared Error (MSE)
 - Variance-covariance matrix
+- R² and adjusted R²
+- t-statistics, p-values, and standard errors for coefficients
+- F-statistic and p-value for overall model significance
 
-**Must be called before accessing residuals, MSE, SSE, etc.**
+**Must be called before accessing statistical measures.**
 
 **Example:**
 ```python
 model = Darbro(df)
 model.calculate_analytical_information()
 
-print("MSE:", model.mse)
-print("SSE:", model.sse)
-print("Residuals:", model.residuals)
+print("R²:", model.r_squared)
+print("F-statistic:", model.f_statistic)
+print("P-values:", model.p_values)
+```
+
+##### `get_summary()`
+
+Returns a formatted summary of regression results similar to R or statsmodels output.
+
+**Returns:** str (formatted summary table)
+
+**Must be called after `calculate_analytical_information()`.**
+
+**Example:**
+```python
+model = Darbro(df)
+model.calculate_analytical_information()
+print(model.get_summary())
+```
+
+**Output:**
+```
+======================================================================
+                     Regression Results
+======================================================================
+R-squared:           0.8014
+Adjusted R-squared:  0.7641
+F-statistic:         21.5157
+Prob (F-statistic):  7.3433e-06
+Mean Squared Error:  6.1503
+Sum Squared Error:   98.4049
+No. Observations:    20
+Df Residuals:        16
+Df Model:            3
+======================================================================
+
+Coefficients:
+----------------------------------------------------------------------
+Variable                Coef      Std Err          t      P>|t|
+----------------------------------------------------------------------
+Intercept           117.0847      99.7824      1.173     0.2578
+triceps               4.3341       3.0155      1.437     0.1699
+thigh                -2.8568       2.5820     -1.106     0.2849
+midarm               -2.1861       1.5955     -1.370     0.1896
+======================================================================
 ```
 
 ##### `predict(X_new)`
@@ -187,8 +248,8 @@ model.calculate_analytical_information()
 # Display results
 print("Intercept (β₀):", model.coefficients[0])
 print("Slope (β₁):", model.coefficients[1])
-print("Mean Squared Error:", model.mse)
-print("R² could be calculated from SSE and SST")
+print("R²:", model.r_squared)
+print("F-statistic p-value:", model.f_p_value)
 
 # Make predictions
 new_advertising = np.array([6.0])
@@ -221,10 +282,19 @@ print(f"Sum of Squared Errors (SSE): {model.sse:.3f}")
 print(f"Mean Squared Error (MSE): {model.mse:.3f}")
 print(f"Root MSE: {np.sqrt(model.mse):.3f}")
 
-print("\n=== Standard Errors ===")
-std_errors = np.sqrt(np.diag(model.variance_covariance))
-for i, se in enumerate(std_errors):
-    print(f"SE(β{i}): {se:.3f}")
+print("\n=== Hypothesis Tests ===")
+print(f"R²: {model.r_squared:.4f}")
+print(f"Adjusted R²: {model.adjusted_r_squared:.4f}")
+print(f"F-statistic: {model.f_statistic:.3f}")
+print(f"F p-value: {model.f_p_value:.6f}")
+
+print("\n=== Coefficient Tests ===")
+var_names = ['Intercept', 'Triceps', 'Thigh', 'Midarm']
+for i, name in enumerate(var_names):
+    print(f"{name}: coef={model.coefficients[i]:.3f}, "
+          f"SE={model.standard_errors[i]:.3f}, "
+          f"t={model.t_statistics[i]:.3f}, "
+          f"p={model.p_values[i]:.4f}")
 
 # Make prediction for new individual
 new_person = np.array([25.0, 50.0, 28.0])  # triceps, thigh, midarm
@@ -316,10 +386,10 @@ Where:
 
 ## Limitations
 
-- No built-in hypothesis testing (t-tests, F-tests)
-- No R² calculation (can be computed manually)
 - No regularization (Ridge, Lasso)
-- Assumes no multicollinearity issues
+- No confidence intervals for predictions
+- No residual diagnostic plots
+- Assumes no severe multicollinearity issues
 - No automatic handling of categorical variables
 - Requires manual data preprocessing
 
@@ -338,8 +408,8 @@ This is an educational library. Suggestions for improvements are welcome!
 ## Future Enhancements
 
 Planned features for future versions:
-- Hypothesis testing (t-statistics, p-values, F-test)
-- R² and adjusted R²
+- ~~Hypothesis testing (t-statistics, p-values, F-test)~~ ✅ Implemented
+- ~~R² and adjusted R²~~ ✅ Implemented
 - Confidence intervals for predictions
 - Residual diagnostics and plots
 - Support for polynomial regression
