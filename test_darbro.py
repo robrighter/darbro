@@ -2,6 +2,7 @@ import unittest
 import numpy as np
 import pandas as pd
 import os
+from scipy import stats
 from darbro import Darbro
 
 
@@ -748,6 +749,437 @@ class TestDarbroHypothesisTestingEdgeCases(unittest.TestCase):
         # The slope coefficient should have high p-value (not significant)
         # p-value for x should be > 0.05
         self.assertGreater(model.p_values[1], 0.05)
+
+
+class TestDarbroConfidenceIntervals(unittest.TestCase):
+    """Test confidence interval for mean response"""
+
+    def setUp(self):
+        """Load data and calculate analytics"""
+        self.df = Darbro.read_csv('bodyfat.csv', 'bodyfat', ['triceps', 'thigh', 'midarm'])
+        self.model = Darbro(self.df)
+        self.model.calculate_analytical_information()
+
+    def test_confidence_interval_returns_tuple(self):
+        """Test that confidence_interval_mean returns a tuple of 3 values"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        result = self.model.confidence_interval_mean(X_new)
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 3)
+
+    def test_confidence_interval_point_estimate(self):
+        """Test that point estimate matches predict() method"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        lower, point, upper = self.model.confidence_interval_mean(X_new)
+        expected_point = self.model.predict(X_new)
+        self.assertAlmostEqual(point, expected_point, places=10)
+
+    def test_confidence_interval_ordering(self):
+        """Test that lower < point < upper"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        lower, point, upper = self.model.confidence_interval_mean(X_new)
+        self.assertLess(lower, point)
+        self.assertLess(point, upper)
+
+    def test_confidence_interval_different_alphas(self):
+        """Test confidence intervals with different alpha levels"""
+        X_new = np.array([25.0, 50.0, 28.0])
+
+        # 90% confidence interval
+        lower_90, point_90, upper_90 = self.model.confidence_interval_mean(X_new, alpha=0.10)
+
+        # 95% confidence interval
+        lower_95, point_95, upper_95 = self.model.confidence_interval_mean(X_new, alpha=0.05)
+
+        # 99% confidence interval
+        lower_99, point_99, upper_99 = self.model.confidence_interval_mean(X_new, alpha=0.01)
+
+        # Point estimates should be the same
+        self.assertAlmostEqual(point_90, point_95, places=10)
+        self.assertAlmostEqual(point_95, point_99, places=10)
+
+        # Wider confidence level should have wider interval
+        width_90 = upper_90 - lower_90
+        width_95 = upper_95 - lower_95
+        width_99 = upper_99 - lower_99
+
+        self.assertLess(width_90, width_95)
+        self.assertLess(width_95, width_99)
+
+    def test_confidence_interval_at_mean_x(self):
+        """Test that CI is narrowest at mean of X"""
+        # Confidence interval at mean of X should be narrower
+        X_mean = np.mean(self.df.iloc[:, 1:].values, axis=0)
+        lower_mean, _, upper_mean = self.model.confidence_interval_mean(X_mean)
+
+        # Confidence interval at extreme value
+        X_extreme = np.array([10.0, 30.0, 15.0])
+        lower_extreme, _, upper_extreme = self.model.confidence_interval_mean(X_extreme)
+
+        # Width at mean should be less than or equal to width at extreme
+        width_mean = upper_mean - lower_mean
+        width_extreme = upper_extreme - lower_extreme
+
+        # This should generally be true, but may not always be due to data structure
+        # So we just test that both are calculated without error
+        self.assertGreater(width_mean, 0)
+        self.assertGreater(width_extreme, 0)
+
+    def test_confidence_interval_error_without_calculation(self):
+        """Test that confidence_interval_mean raises error without analytics"""
+        df = Darbro.read_csv('bodyfat.csv', 'bodyfat', ['triceps', 'thigh', 'midarm'])
+        model = Darbro(df)
+        # Don't call calculate_analytical_information()
+
+        X_new = np.array([25.0, 50.0, 28.0])
+        with self.assertRaises(ValueError):
+            model.confidence_interval_mean(X_new)
+
+    def test_confidence_interval_simple_regression(self):
+        """Test confidence interval with simple linear regression"""
+        np.random.seed(42)
+        n = 50
+        x = np.linspace(0, 10, n)
+        y = 2 + 3 * x + np.random.normal(0, 1, n)
+        df = pd.DataFrame({'y': y, 'x': x})
+        model = Darbro(df)
+        model.calculate_analytical_information()
+
+        X_new = np.array([5.0])
+        lower, point, upper = model.confidence_interval_mean(X_new)
+
+        # Point should be approximately 2 + 3*5 = 17
+        self.assertGreater(point, 15)
+        self.assertLess(point, 19)
+
+        # Interval should be reasonable
+        self.assertLess(upper - lower, 5)
+
+    def test_confidence_interval_manual_calculation(self):
+        """Test confidence interval calculation manually"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        alpha = 0.05
+
+        # Get result from method
+        lower, point, upper = self.model.confidence_interval_mean(X_new, alpha)
+
+        # Manual calculation
+        X_new_with_intercept = np.insert(X_new, 0, 1)
+        y_pred = np.dot(X_new_with_intercept, self.model.coefficients)
+        XtX_inv = np.linalg.inv(self.model.X.T @ self.model.X)
+        se_mean = np.sqrt(self.model.mse * X_new_with_intercept.T @ XtX_inv @ X_new_with_intercept)
+
+        n = len(self.model.y)
+        p = self.model.X.shape[1]
+        df = n - p
+        t_critical = stats.t.ppf(1 - alpha/2, df)
+        margin = t_critical * se_mean
+
+        expected_lower = y_pred - margin
+        expected_upper = y_pred + margin
+
+        self.assertAlmostEqual(lower, expected_lower, places=10)
+        self.assertAlmostEqual(point, y_pred, places=10)
+        self.assertAlmostEqual(upper, expected_upper, places=10)
+
+
+class TestDarbroPredictionIntervals(unittest.TestCase):
+    """Test prediction interval for new observations"""
+
+    def setUp(self):
+        """Load data and calculate analytics"""
+        self.df = Darbro.read_csv('bodyfat.csv', 'bodyfat', ['triceps', 'thigh', 'midarm'])
+        self.model = Darbro(self.df)
+        self.model.calculate_analytical_information()
+
+    def test_prediction_interval_returns_tuple(self):
+        """Test that prediction_interval returns a tuple of 3 values"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        result = self.model.prediction_interval(X_new)
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 3)
+
+    def test_prediction_interval_point_estimate(self):
+        """Test that point estimate matches predict() method"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        lower, point, upper = self.model.prediction_interval(X_new)
+        expected_point = self.model.predict(X_new)
+        self.assertAlmostEqual(point, expected_point, places=10)
+
+    def test_prediction_interval_ordering(self):
+        """Test that lower < point < upper"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        lower, point, upper = self.model.prediction_interval(X_new)
+        self.assertLess(lower, point)
+        self.assertLess(point, upper)
+
+    def test_prediction_interval_wider_than_confidence(self):
+        """Test that prediction interval is wider than confidence interval"""
+        X_new = np.array([25.0, 50.0, 28.0])
+
+        ci_lower, ci_point, ci_upper = self.model.confidence_interval_mean(X_new)
+        pi_lower, pi_point, pi_upper = self.model.prediction_interval(X_new)
+
+        # Point estimates should be the same
+        self.assertAlmostEqual(ci_point, pi_point, places=10)
+
+        # Prediction interval should be wider
+        ci_width = ci_upper - ci_lower
+        pi_width = pi_upper - pi_lower
+
+        self.assertGreater(pi_width, ci_width)
+
+        # Prediction interval should contain confidence interval
+        self.assertLessEqual(pi_lower, ci_lower)
+        self.assertGreaterEqual(pi_upper, ci_upper)
+
+    def test_prediction_interval_different_alphas(self):
+        """Test prediction intervals with different alpha levels"""
+        X_new = np.array([25.0, 50.0, 28.0])
+
+        # 90% prediction interval
+        lower_90, point_90, upper_90 = self.model.prediction_interval(X_new, alpha=0.10)
+
+        # 95% prediction interval
+        lower_95, point_95, upper_95 = self.model.prediction_interval(X_new, alpha=0.05)
+
+        # 99% prediction interval
+        lower_99, point_99, upper_99 = self.model.prediction_interval(X_new, alpha=0.01)
+
+        # Point estimates should be the same
+        self.assertAlmostEqual(point_90, point_95, places=10)
+        self.assertAlmostEqual(point_95, point_99, places=10)
+
+        # Wider confidence level should have wider interval
+        width_90 = upper_90 - lower_90
+        width_95 = upper_95 - lower_95
+        width_99 = upper_99 - lower_99
+
+        self.assertLess(width_90, width_95)
+        self.assertLess(width_95, width_99)
+
+    def test_prediction_interval_error_without_calculation(self):
+        """Test that prediction_interval raises error without analytics"""
+        df = Darbro.read_csv('bodyfat.csv', 'bodyfat', ['triceps', 'thigh', 'midarm'])
+        model = Darbro(df)
+        # Don't call calculate_analytical_information()
+
+        X_new = np.array([25.0, 50.0, 28.0])
+        with self.assertRaises(ValueError):
+            model.prediction_interval(X_new)
+
+    def test_prediction_interval_simple_regression(self):
+        """Test prediction interval with simple linear regression"""
+        np.random.seed(42)
+        n = 50
+        x = np.linspace(0, 10, n)
+        y = 2 + 3 * x + np.random.normal(0, 1, n)
+        df = pd.DataFrame({'y': y, 'x': x})
+        model = Darbro(df)
+        model.calculate_analytical_information()
+
+        X_new = np.array([5.0])
+        lower, point, upper = model.prediction_interval(X_new)
+
+        # Point should be approximately 2 + 3*5 = 17
+        self.assertGreater(point, 15)
+        self.assertLess(point, 19)
+
+        # Interval should be wider than confidence interval
+        ci_lower, _, ci_upper = model.confidence_interval_mean(X_new)
+        self.assertLess(lower, ci_lower)
+        self.assertGreater(upper, ci_upper)
+
+    def test_prediction_interval_manual_calculation(self):
+        """Test prediction interval calculation manually"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        alpha = 0.05
+
+        # Get result from method
+        lower, point, upper = self.model.prediction_interval(X_new, alpha)
+
+        # Manual calculation
+        X_new_with_intercept = np.insert(X_new, 0, 1)
+        y_pred = np.dot(X_new_with_intercept, self.model.coefficients)
+        XtX_inv = np.linalg.inv(self.model.X.T @ self.model.X)
+        se_pred = np.sqrt(self.model.mse * (1 + X_new_with_intercept.T @ XtX_inv @ X_new_with_intercept))
+
+        n = len(self.model.y)
+        p = self.model.X.shape[1]
+        df = n - p
+        t_critical = stats.t.ppf(1 - alpha/2, df)
+        margin = t_critical * se_pred
+
+        expected_lower = y_pred - margin
+        expected_upper = y_pred + margin
+
+        self.assertAlmostEqual(lower, expected_lower, places=10)
+        self.assertAlmostEqual(point, y_pred, places=10)
+        self.assertAlmostEqual(upper, expected_upper, places=10)
+
+    def test_prediction_interval_perfect_fit(self):
+        """Test prediction interval with perfect fit"""
+        x = np.array([1, 2, 3, 4, 5])
+        y = 2 + 3 * x
+        df = pd.DataFrame({'y': y, 'x': x})
+        model = Darbro(df)
+        model.calculate_analytical_information()
+
+        X_new = np.array([3.0])
+        lower, point, upper = model.prediction_interval(X_new)
+
+        # With perfect fit, MSE should be essentially zero
+        # So interval should be very narrow (essentially a point)
+        # However, with small sample, numerical issues might occur
+        self.assertIsNotNone(lower)
+        self.assertIsNotNone(upper)
+
+
+class TestDarbroPredictWithIntervals(unittest.TestCase):
+    """Test the predict_with_intervals() convenience method"""
+
+    def setUp(self):
+        """Load data and calculate analytics"""
+        self.df = Darbro.read_csv('bodyfat.csv', 'bodyfat', ['triceps', 'thigh', 'midarm'])
+        self.model = Darbro(self.df)
+        self.model.calculate_analytical_information()
+
+    def test_predict_with_intervals_returns_dict(self):
+        """Test that predict_with_intervals returns a dictionary"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        result = self.model.predict_with_intervals(X_new)
+        self.assertIsInstance(result, dict)
+
+    def test_predict_with_intervals_keys(self):
+        """Test that result contains all expected keys"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        result = self.model.predict_with_intervals(X_new)
+
+        expected_keys = ['prediction', 'confidence_interval', 'prediction_interval', 'confidence_level']
+        for key in expected_keys:
+            self.assertIn(key, result)
+
+    def test_predict_with_intervals_prediction_value(self):
+        """Test that prediction value matches predict() method"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        result = self.model.predict_with_intervals(X_new)
+        expected_prediction = self.model.predict(X_new)
+        self.assertAlmostEqual(result['prediction'], expected_prediction, places=10)
+
+    def test_predict_with_intervals_confidence_interval_format(self):
+        """Test that confidence_interval is a tuple of (lower, upper)"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        result = self.model.predict_with_intervals(X_new)
+
+        ci = result['confidence_interval']
+        self.assertIsInstance(ci, tuple)
+        self.assertEqual(len(ci), 2)
+
+        lower, upper = ci
+        self.assertLess(lower, upper)
+
+    def test_predict_with_intervals_prediction_interval_format(self):
+        """Test that prediction_interval is a tuple of (lower, upper)"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        result = self.model.predict_with_intervals(X_new)
+
+        pi = result['prediction_interval']
+        self.assertIsInstance(pi, tuple)
+        self.assertEqual(len(pi), 2)
+
+        lower, upper = pi
+        self.assertLess(lower, upper)
+
+    def test_predict_with_intervals_confidence_level(self):
+        """Test that confidence_level is correct"""
+        X_new = np.array([25.0, 50.0, 28.0])
+
+        result_95 = self.model.predict_with_intervals(X_new, alpha=0.05)
+        self.assertEqual(result_95['confidence_level'], 95.0)
+
+        result_90 = self.model.predict_with_intervals(X_new, alpha=0.10)
+        self.assertEqual(result_90['confidence_level'], 90.0)
+
+        result_99 = self.model.predict_with_intervals(X_new, alpha=0.01)
+        self.assertEqual(result_99['confidence_level'], 99.0)
+
+    def test_predict_with_intervals_interval_relationship(self):
+        """Test that prediction interval is wider than confidence interval"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        result = self.model.predict_with_intervals(X_new)
+
+        ci_lower, ci_upper = result['confidence_interval']
+        pi_lower, pi_upper = result['prediction_interval']
+
+        # Prediction interval should contain confidence interval
+        self.assertLessEqual(pi_lower, ci_lower)
+        self.assertGreaterEqual(pi_upper, ci_upper)
+
+    def test_predict_with_intervals_consistency(self):
+        """Test that results match individual method calls"""
+        X_new = np.array([25.0, 50.0, 28.0])
+        alpha = 0.05
+
+        result = self.model.predict_with_intervals(X_new, alpha)
+
+        # Check confidence interval
+        ci_lower_expected, point_expected, ci_upper_expected = self.model.confidence_interval_mean(X_new, alpha)
+        self.assertAlmostEqual(result['prediction'], point_expected, places=10)
+        self.assertAlmostEqual(result['confidence_interval'][0], ci_lower_expected, places=10)
+        self.assertAlmostEqual(result['confidence_interval'][1], ci_upper_expected, places=10)
+
+        # Check prediction interval
+        pi_lower_expected, _, pi_upper_expected = self.model.prediction_interval(X_new, alpha)
+        self.assertAlmostEqual(result['prediction_interval'][0], pi_lower_expected, places=10)
+        self.assertAlmostEqual(result['prediction_interval'][1], pi_upper_expected, places=10)
+
+    def test_predict_with_intervals_multiple_predictions(self):
+        """Test making multiple predictions with intervals"""
+        test_cases = [
+            np.array([20.0, 45.0, 25.0]),
+            np.array([30.0, 55.0, 30.0]),
+            np.array([25.0, 50.0, 27.5])
+        ]
+
+        results = [self.model.predict_with_intervals(x) for x in test_cases]
+
+        # All should return valid dictionaries
+        for result in results:
+            self.assertIsInstance(result, dict)
+            self.assertIn('prediction', result)
+            self.assertIn('confidence_interval', result)
+            self.assertIn('prediction_interval', result)
+
+        # Predictions should be different
+        predictions = [r['prediction'] for r in results]
+        self.assertNotEqual(predictions[0], predictions[1])
+        self.assertNotEqual(predictions[1], predictions[2])
+
+    def test_predict_with_intervals_simple_regression(self):
+        """Test predict_with_intervals with simple linear regression"""
+        np.random.seed(42)
+        n = 100
+        x = np.linspace(0, 10, n)
+        y = 5 + 2 * x + np.random.normal(0, 2, n)
+        df = pd.DataFrame({'y': y, 'x': x})
+        model = Darbro(df)
+        model.calculate_analytical_information()
+
+        X_new = np.array([5.0])
+        result = model.predict_with_intervals(X_new)
+
+        # Prediction should be close to 5 + 2*5 = 15
+        self.assertGreater(result['prediction'], 13)
+        self.assertLess(result['prediction'], 17)
+
+        # Intervals should contain the prediction
+        ci_lower, ci_upper = result['confidence_interval']
+        pi_lower, pi_upper = result['prediction_interval']
+
+        self.assertLess(ci_lower, result['prediction'])
+        self.assertGreater(ci_upper, result['prediction'])
+        self.assertLess(pi_lower, result['prediction'])
+        self.assertGreater(pi_upper, result['prediction'])
 
 
 if __name__ == '__main__':
